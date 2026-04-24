@@ -93,11 +93,22 @@ API_RESPONSE=\$(curl -s --max-time 10 \
   "https://ipv64.net/api.php?get_domains" \
   -H "Authorization: Bearer \${API_KEY}")
 
+# When CDN is active IPv64 adds a second active AAAA record with the CDN IP
+# and marks the real Pi IP as deactivated=1. Filter for that entry.
 API_IPV6=\$(echo "\$API_RESPONSE" \
   | jq -r --arg domain "\$PARENT" --arg sub "\$SUBDOMAIN" \
-    '.subdomains[$domain].records[]
-     | select(.praefix == $sub and .type == "AAAA")
+    '.subdomains[\$domain].records[]
+     | select(.praefix == \$sub and .type == "AAAA" and .deactivated == 1)
      | .content' 2>/dev/null | head -1)
+
+# Fallback: no deactivated record means CDN is off, use the active one
+if [[ -z "\$API_IPV6" ]]; then
+  API_IPV6=\$(echo "\$API_RESPONSE" \
+    | jq -r --arg domain "\$PARENT" --arg sub "\$SUBDOMAIN" \
+      '.subdomains[\$domain].records[]
+       | select(.praefix == \$sub and .type == "AAAA" and .deactivated == 0)
+       | .content' 2>/dev/null | head -1)
+fi
 
 if [[ -z "\$API_IPV6" ]]; then
   echo "[\$TIMESTAMP] [\$TRIGGER] ERROR: API-Abfrage fehlgeschlagen oder kein AAAA-Eintrag gefunden" >> "\$LOGFILE"
