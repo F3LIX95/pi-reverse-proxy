@@ -26,9 +26,10 @@ error() { echo -e "${RED}[✗]${NC} $*"; exit 1; }
 [[ ! -f "$SCRIPT" ]] && error "ipv64-update.sh nicht gefunden. Bitte zuerst install.sh ausführen."
 
 # ── Aktuelle Werte auslesen ──────────────────────────────────
-CUR_DOMAIN=$(grep '^DOMAIN=' "$SCRIPT" | cut -d'"' -f2)
-CUR_TOKEN=$(grep '^TOKEN='  "$SCRIPT" | cut -d'"' -f2)
-CUR_IFACE=$(grep '^IFACE='  "$SCRIPT" | cut -d'"' -f2)
+CUR_DOMAIN=$(grep '^DOMAIN='  "$SCRIPT" | cut -d'"' -f2)
+CUR_TOKEN=$(grep '^TOKEN='    "$SCRIPT" | cut -d'"' -f2)
+CUR_API_KEY=$(grep '^API_KEY=' "$SCRIPT" | cut -d'"' -f2)
+CUR_IFACE=$(grep '^IFACE='    "$SCRIPT" | cut -d'"' -f2)
 
 echo ""
 echo "============================================"
@@ -41,9 +42,13 @@ echo ""
 read -rp "  Domain [$CUR_DOMAIN]: " NEW_DOMAIN
 NEW_DOMAIN="${NEW_DOMAIN:-$CUR_DOMAIN}"
 
-read -rsp "  Token (leer = unverändert): " NEW_TOKEN
+read -rsp "  DynDNS Update Token (leer = unverändert): " NEW_TOKEN
 echo ""
 NEW_TOKEN="${NEW_TOKEN:-$CUR_TOKEN}"
+
+read -rsp "  Account API Key (leer = unverändert): " NEW_API_KEY
+echo ""
+NEW_API_KEY="${NEW_API_KEY:-$CUR_API_KEY}"
 
 read -rp "  Interface [$CUR_IFACE]: " NEW_IFACE
 NEW_IFACE="${NEW_IFACE:-$CUR_IFACE}"
@@ -58,9 +63,10 @@ read -rp "  Fortfahren? [j/N]: " CONFIRM
 echo ""
 
 # ── Werte ersetzen ───────────────────────────────────────────
-sed -i "s|^DOMAIN=.*|DOMAIN=\"${NEW_DOMAIN}\"|" "$SCRIPT"
-sed -i "s|^TOKEN=.*|TOKEN=\"${NEW_TOKEN}\"|"   "$SCRIPT"
-sed -i "s|^IFACE=.*|IFACE=\"${NEW_IFACE}\"|"  "$SCRIPT"
+sed -i "s|^DOMAIN=.*|DOMAIN=\"${NEW_DOMAIN}\"|"    "$SCRIPT"
+sed -i "s|^TOKEN=.*|TOKEN=\"${NEW_TOKEN}\"|"        "$SCRIPT"
+sed -i "s|^API_KEY=.*|API_KEY=\"${NEW_API_KEY}\"|" "$SCRIPT"
+sed -i "s|^IFACE=.*|IFACE=\"${NEW_IFACE}\"|"       "$SCRIPT"
 log "Konfiguration aktualisiert"
 
 # ── Test-Lauf ────────────────────────────────────────────────

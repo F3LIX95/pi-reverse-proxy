@@ -77,11 +77,14 @@ sudo bash ddns/install.sh
 
 Asks for:
 
-| Input | Example |
-|---|---|
-| Domain | `myhost.ipv64.de` |
-| Update Token | From your [IPv64.net dashboard](https://ipv64.net) |
-| Interface | `eth0` or `wlan0` |
+| Input | Example | Where to find |
+|---|---|---|
+| Domain | `myhost.ipv64.de` | Your IPv64.net domain |
+| DynDNS Update Token | `abc123…` | IPv64 dashboard → DynDNS → Update Token |
+| Account API Key | `xyz789…` | IPv64 dashboard → Account → API Key |
+| Interface | `eth0` or `wlan0` | `ip link show` |
+
+> **Two different credentials are needed.** The DynDNS Update Token sends IP updates. The Account API Key reads the currently stored record from the IPv64 API — this is necessary when using the IPv64 CDN/reverse proxy, where a DNS lookup would return the CDN's IP instead of the one stored in the database.
 
 ### Update (change domain / token / interface)
 
@@ -142,7 +145,8 @@ dig AAAA <your-domain> +short @ns1.ipv64.net
 | `ERROR: Konnte keine öffentliche IPv6 ermitteln` | No IPv6 on interface / wrong interface | `ip -6 addr show eth0` |
 | `ERROR: Update fehlgeschlagen` | Wrong token / IPv64.net unreachable | Check token, `curl ipv64.net` |
 | Timer not running after reboot | Timer not enabled | `sudo systemctl enable ipv64-update.timer` |
-| `dig` not found | Package missing | `sudo apt install dnsutils` |
+| `jq` not found | Package missing | `sudo apt install jq` |
+| `ERROR: API-Abfrage fehlgeschlagen` | Wrong API key or network issue | Check Account API Key, `curl https://ipv64.net/api.php?get_domains -H "Authorization: Bearer <key>"` |
 | Dispatcher not firing | File not created | `ls /etc/NetworkManager/dispatcher.d/` |
 
 **IPv6 address types on the Pi:**
