@@ -2,18 +2,14 @@
 # ============================================================
 # IPv64 DynDNS Update – Install Script
 # ============================================================
-# Usage: sudo bash install-ipv64.sh
+# Usage: sudo bash install.sh
 # ============================================================
 
 set -e
 
-# ── Config ──────────────────────────────────────────────────
-DOMAIN=""
-TOKEN=""
-IFACE=""
 INTERVAL="5min"
 LOG_RETAIN="14"
-# ────────────────────────────────────────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -21,15 +17,12 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-log()     { echo -e "${GREEN}[✓]${NC} $*"; }
-info()    { echo -e "${BLUE}[i]${NC} $*"; }
-warn()    { echo -e "${YELLOW}[!]${NC} $*"; }
-error()   { echo -e "${RED}[✗]${NC} $*"; exit 1; }
+log()   { echo -e "${GREEN}[✓]${NC} $*"; }
+info()  { echo -e "${BLUE}[i]${NC} $*"; }
+warn()  { echo -e "${YELLOW}[!]${NC} $*"; }
+error() { echo -e "${RED}[✗]${NC} $*"; exit 1; }
 
-# ── Root check ──────────────────────────────────────────────
-if [[ "$EUID" -ne 0 ]]; then
-  error "Bitte als root ausführen: sudo bash $0"
-fi
+[[ "$EUID" -ne 0 ]] && error "Bitte als root ausführen: sudo bash $0"
 
 echo ""
 echo "============================================"
@@ -37,27 +30,23 @@ echo "  IPv64 DynDNS Update – Installer"
 echo "============================================"
 echo ""
 
-# ── Eingaben ────────────────────────────────────────────────
-if [[ -z "$DOMAIN" ]]; then
-  read -rp "  Domain (z.B. meinhost.ipv64.de): " DOMAIN
-fi
+read -rp "  Domain (z.B. meinhost.ipv64.de): " DOMAIN
+[[ -z "$DOMAIN" ]] && error "Domain darf nicht leer sein."
 
-if [[ -z "$TOKEN" ]]; then
-  read -rsp "  IPv64 Update Token: " TOKEN
-  echo ""
-fi
+read -rsp "  IPv64 Update Token: " TOKEN
+echo ""
+[[ -z "$TOKEN" ]] && error "Token darf nicht leer sein."
 
-if [[ -z "$IFACE" ]]; then
-  info "Verfügbare Interfaces:"
-  ip -6 addr show scope global | grep -oP '(?<=\d: )\w+' | sort -u | sed 's/^/    /'
-  read -rp "  Interface (z.B. eth0): " IFACE
-fi
+info "Verfügbare Interfaces:"
+ip -6 addr show scope global | grep -oP '(?<=\d: )\w+' | sort -u | sed 's/^/    /' || true
+read -rp "  Interface (z.B. eth0): " IFACE
+[[ -z "$IFACE" ]] && error "Interface darf nicht leer sein."
 
 echo ""
 info "Konfiguration:"
-info "  Domain:    $DOMAIN"
-info "  Interface: $IFACE"
-info "  Interval:  $INTERVAL"
+info "  Domain:        $DOMAIN"
+info "  Interface:     $IFACE"
+info "  Interval:      $INTERVAL"
 info "  Log-Retention: ${LOG_RETAIN} Tage"
 echo ""
 read -rp "  Fortfahren? [j/N]: " CONFIRM
@@ -67,9 +56,9 @@ echo ""
 # ── Abhängigkeiten ───────────────────────────────────────────
 info "Prüfe Abhängigkeiten..."
 apt-get install -y -q dnsutils curl > /dev/null 2>&1
-log "dnsutils + curl installiert"
+log "dnsutils + curl ok"
 
-# ── Update Script ────────────────────────────────────────────
+# ── Update-Script ────────────────────────────────────────────
 info "Schreibe Update-Script..."
 cat > /usr/local/bin/ipv64-update.sh << SCRIPT
 #!/bin/bash
@@ -108,8 +97,7 @@ else
   exit 1
 fi
 SCRIPT
-
-chmod +x /usr/local/bin/ipv64-update.sh
+chmod 700 /usr/local/bin/ipv64-update.sh
 log "Update-Script erstellt: /usr/local/bin/ipv64-update.sh"
 
 # ── systemd Service ──────────────────────────────────────────
@@ -189,21 +177,14 @@ log "Ergebnis:"
 tail -1 /var/log/ipv64-update.log
 echo ""
 
-# ── Zusammenfassung ──────────────────────────────────────────
 echo "============================================"
 echo -e "  ${GREEN}Installation abgeschlossen!${NC}"
 echo "============================================"
 echo ""
-echo "  Installierte Komponenten:"
-echo "    /usr/local/bin/ipv64-update.sh"
-echo "    /etc/systemd/system/ipv64-update.service"
-echo "    /etc/systemd/system/ipv64-update.timer"
-echo "    /etc/NetworkManager/dispatcher.d/99-ipv64-update"
-echo "    /etc/logrotate.d/ipv64-update"
-echo ""
 echo "  Nützliche Befehle:"
-echo "    Log prüfen:       tail -f /var/log/ipv64-update.log"
-echo "    Timer Status:     systemctl list-timers ipv64-update.timer"
-echo "    Manuell ausführen: sudo /usr/local/bin/ipv64-update.sh manual"
-echo "    DNS prüfen:       dig AAAA ${DOMAIN} +short @ns1.ipv64.net"
+echo "    Log:       tail -f /var/log/ipv64-update.log"
+echo "    Timer:     systemctl list-timers ipv64-update.timer"
+echo "    Manuell:   sudo /usr/local/bin/ipv64-update.sh manual"
+echo "    Update:    sudo bash ${SCRIPT_DIR}/update.sh"
+echo "    Entfernen: sudo bash ${SCRIPT_DIR}/uninstall.sh"
 echo ""

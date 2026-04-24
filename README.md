@@ -1,189 +1,218 @@
-# IPv64 DynDNS Updater
+# pi-reverse-proxy
 
-Automatic IPv6 DynDNS update for [IPv64.net](https://ipv64.net) on Raspberry Pi / Ubuntu Linux.
+Raspberry Pi setup for two things that work together:
 
-No external IP-check service needed — the public IPv6 address is read directly from the network interface and compared against the live DNS entry via `dig`.
+1. **DDNS** — keeps an IPv64.net AAAA record pointing at the Pi's current public IPv6 address
+2. **Nginx reverse proxy** — accepts incoming IPv6 connections and forwards them to IPv4-only backends on the local network (e.g. a Loxone Miniserver)
+
+```
+Internet (IPv6)
+      │
+      ▼
+ Fritzbox (port open)
+      │
+      ▼
+Raspberry Pi – nginx
+      │   listens on [::]:PORT
+      ▼
+IPv4-only backend
+ e.g. http://loxone.fritz.box:1907
+```
 
 ---
 
-## Features
+## Repository layout
 
-- 📡 **No webcheck** — reads IPv6 directly from interface
-- 🔍 **DNS comparison** — queries IPv64 nameserver directly, no local DNS caching
-- 🏷️ **Event logging** — logs which trigger caused the update (`timer`, `nm-dhcp6-change`, etc.)
-- ⚡ **Dual trigger** — NetworkManager dispatcher (instant) + systemd timer (fallback)
-- 🔄 **logrotate** — daily rotation, 14 days retention
-- 🚀 **One-command install** — interactive install script for new devices
+```
+ddns/
+  install.sh      ← interactive install
+  update.sh       ← change domain / token / interface
+  uninstall.sh    ← remove everything
+
+nginx/
+  install.sh      ← interactive install (asks for backend URL + port)
+  update.sh       ← change backend or port for an existing proxy
+  uninstall.sh    ← remove one proxy or all
+```
 
 ---
 
-## How It Works
+## Part 1 – IPv64 DDNS Updater
+
+Keeps an IPv64.net AAAA record in sync with the Pi's public IPv6 address.
+
+### How it works
 
 ```
 ISP assigns new IPv6 prefix
         │
-        ▼
-NetworkManager detects change
+        ├─► NetworkManager dispatcher fires immediately
         │
-        ▼
-Dispatcher triggers script immediately
-        │                    │
-        ▼                    ▼
-  Read IPv6 from         systemd Timer
-  interface (eth0)       (every 5 min,
-        │                 as fallback)
-        ▼
-  Query DNS entry
-  @ns1.ipv64.net
-        │
-   ┌────┴────┐
-   │ Match?  │
-   └────┬────┘
-     No │
-        ▼
-  Send update to
-  ipv64.net API
-        │
-        ▼
-  Log result to
-  /var/log/ipv64-update.log
+        └─► systemd timer fires every 5 min (fallback)
+                │
+                ▼
+        Read IPv6 from interface (no external webcheck)
+                │
+                ▼
+        Query DNS @ ns1.ipv64.net
+                │
+           ┌────┴────┐
+           │ Match?  │
+           └────┬────┘
+             No │
+                ▼
+        POST update to ipv64.net API
+                │
+                ▼
+        Log result → /var/log/ipv64-update.log
 ```
 
----
-
-## Requirements
-
-- Raspberry Pi / Ubuntu Linux
-- NetworkManager
-- `curl`, `dnsutils` (installed automatically by install script)
-- IPv64.net account with a domain and update token
-
----
-
-## Quick Install
+### Install
 
 ```bash
-wget https://raw.githubusercontent.com/<your-username>/<your-repo>/main/install-ipv64.sh
-chmod +x install-ipv64.sh
-sudo ./install-ipv64.sh
+sudo bash ddns/install.sh
 ```
 
-The script will ask for:
+Asks for:
 
 | Input | Example |
 |---|---|
 | Domain | `myhost.ipv64.de` |
-| Update Token | From your IPv64.net dashboard |
+| Update Token | From your [IPv64.net dashboard](https://ipv64.net) |
 | Interface | `eth0` or `wlan0` |
 
----
+### Update (change domain / token / interface)
 
-## Files
+```bash
+sudo bash ddns/update.sh
+```
 
-| File | Description |
-|---|---|
-| `install-ipv64.sh` | Interactive install script |
-| `ipv64-update.sh` | Main update script |
+Patches the running script in-place and performs a test run.
 
-After installation the following files are created on the system:
+### Uninstall
+
+```bash
+sudo bash ddns/uninstall.sh
+```
+
+Removes all installed files and systemd units. The log file at `/var/log/ipv64-update.log` is kept.
+
+### Installed files
 
 | Path | Description |
 |---|---|
-| `/usr/local/bin/ipv64-update.sh` | Update script |
-| `/etc/systemd/system/ipv64-update.service` | systemd service (oneshot) |
-| `/etc/systemd/system/ipv64-update.timer` | systemd timer (every 5 min) |
-| `/etc/NetworkManager/dispatcher.d/99-ipv64-update` | NM dispatcher |
-| `/etc/logrotate.d/ipv64-update` | logrotate config |
+| `/usr/local/bin/ipv64-update.sh` | Main update script |
+| `/etc/systemd/system/ipv64-update.service` | systemd oneshot service |
+| `/etc/systemd/system/ipv64-update.timer` | Timer (every 5 min, 30 s after boot) |
+| `/etc/NetworkManager/dispatcher.d/99-ipv64-update` | Instant trigger on network change |
+| `/etc/logrotate.d/ipv64-update` | Daily rotation, 14 days retention |
 | `/var/log/ipv64-update.log` | Log file |
 
----
-
-## Log Examples
-
-```
-[2026-04-24 01:00:32] [timer] INFO: Keine Änderung - DNS stimmt überein (2003:eb:5726:b500:...)
-[2026-04-24 01:14:17] [nm-dhcp6-change] SUCCESS: DNS aktualisiert 2003:eb:5726:... → 2003:eb:9999:...
-[2026-04-24 01:15:00] [timer] INFO: Keine Änderung - DNS stimmt überein (2003:eb:9999:...)
-[2026-04-24 02:00:01] [timer] ERROR: Update fehlgeschlagen. Response: ...
-```
-
----
-
-## Useful Commands
+### Useful commands
 
 ```bash
-# Watch live log
+# Live log
 tail -f /var/log/ipv64-update.log
 
-# Show only errors
+# Errors only
 grep ERROR /var/log/ipv64-update.log
 
-# Check timer status & next run
+# Timer status and next run
 systemctl list-timers ipv64-update.timer
 
-# Trigger manual run
+# Manual run
 sudo /usr/local/bin/ipv64-update.sh manual
 
-# Check what IP the script would use
+# Check which IPv6 the script would use
 ip -6 addr show eth0 scope global \
   | grep -oP '(?<=inet6 )[0-9a-f:]+(?=/)' \
   | grep -v '^f[cd]' \
   | head -1
 
-# Check current DNS entry at IPv64 nameserver
+# Check current DNS at IPv64 nameserver
 dig AAAA <your-domain> +short @ns1.ipv64.net
-
-# View systemd journal for this service
-journalctl -u ipv64-update.service -n 20
 ```
 
----
-
-## Troubleshooting
+### Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `ERROR: Konnte keine öffentliche IPv6 ermitteln` | No IPv6 on interface / wrong interface | Check `ip -6 addr show eth0` |
-| `ERROR: Update fehlgeschlagen` | Wrong token / IPv64.net unreachable | Verify token, check `curl ipv64.net` |
+| `ERROR: Konnte keine öffentliche IPv6 ermitteln` | No IPv6 on interface / wrong interface | `ip -6 addr show eth0` |
+| `ERROR: Update fehlgeschlagen` | Wrong token / IPv64.net unreachable | Check token, `curl ipv64.net` |
 | Timer not running after reboot | Timer not enabled | `sudo systemctl enable ipv64-update.timer` |
-| Script not found | Missing permissions | `sudo chmod +x /usr/local/bin/ipv64-update.sh` |
 | `dig` not found | Package missing | `sudo apt install dnsutils` |
-| Dispatcher not firing | File not created | Check `ls /etc/NetworkManager/dispatcher.d/` |
+| Dispatcher not firing | File not created | `ls /etc/NetworkManager/dispatcher.d/` |
 
-### IPv6 Address Types
+**IPv6 address types on the Pi:**
 
-The Raspberry Pi may have multiple global IPv6 addresses:
-
-| Prefix | Type | Used for |
+| Prefix | Type | Used |
 |---|---|---|
-| `2003:...` / `2001:...` | Public (ISP) | ✅ This is the DynDNS address |
-| `fdXX:...` / `fcXX:...` | ULA (private, not routable) | ❌ Filtered out automatically |
-| `fe80:...` | Link-local | ❌ Not global scope |
+| `2003:...` / `2001:...` | Public (ISP) | ✅ DynDNS address |
+| `fdXX:...` / `fcXX:...` | ULA (private) | ❌ Filtered out |
+| `fe80:...` | Link-local | ❌ Not global |
+
+> **Never commit your update token.** The token grants full control over your DNS entries.
 
 ---
 
-## Security Notes
+## Part 2 – Nginx Reverse Proxy
 
-> ⚠️ **Never commit your update token to Git.**
->
-> The token in `ipv64-update.sh` grants full control over your DNS entries.
-> Either add the script to `.gitignore` or replace the token with a placeholder before committing.
+Accepts IPv6 (and IPv4) connections on a given port and proxies them to an IPv4-only backend. WebSocket support is included (long-lived `Upgrade` connections).
 
-Recommended `.gitignore`:
-```
-ipv64-update.sh
+### Install
+
+```bash
+sudo bash nginx/install.sh
 ```
 
----
+Asks for:
 
-## License
+| Input | Example |
+|---|---|
+| Proxy name | `loxone1` |
+| Backend URL | `http://loxone.fritz.box` |
+| Port | `1907` |
 
-MIT
+The same port is used for both listening and the backend. Each proxy gets its own nginx site config at `/etc/nginx/sites-available/<name>` and a metadata file at `nginx/.<name>.conf` that `update.sh` / `uninstall.sh` read later.
+
+### Update (change backend URL or port)
+
+```bash
+sudo bash nginx/update.sh [proxy-name]
+# or omit the name to be prompted
+```
+
+### Uninstall
+
+```bash
+sudo bash nginx/uninstall.sh [proxy-name]
+# or use 'alle' to remove every managed proxy
+```
+
+### After install: open the port on the Fritzbox
+
+1. Fritzbox → Internet → Freigaben → IPv6
+2. Add rule: TCP, port `<PORT>` → your Pi's IPv6 address
+
+### Useful commands
+
+```bash
+# nginx error log
+sudo tail -f /var/log/nginx/error.log
+
+# Check port is open
+ss -tlnp | grep <PORT>
+
+# Test config
+sudo nginx -t
+
+# Reload after manual edits
+sudo systemctl reload nginx
+```
 
 ---
 
 ## Resources
 
 - [IPv64.net Dashboard](https://ipv64.net)
-- [IPv64.net API Documentation](https://ipv64.net/dyndns_updater_api)
-- [IPv64.net DynDNS Helper](https://ipv64.net/dyndns_helper)
+- [IPv64.net API](https://ipv64.net/dyndns_updater_api)
