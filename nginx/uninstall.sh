@@ -1,7 +1,8 @@
 #!/bin/bash
 # ============================================================
 # Nginx Reverse Proxy – Uninstall Script
-# Removes a specific proxy config or all proxies.
+# Removes a specific proxy config (and optionally its
+# Let's Encrypt certificate) or all managed proxies.
 # ============================================================
 # Usage: sudo bash uninstall.sh [proxy-name]
 #        Omit proxy-name to be prompted or remove all.
@@ -35,7 +36,8 @@ echo ""
 # ── Proxy-Name bestimmen ─────────────────────────────────────
 PROXY_NAME="$1"
 if [[ -z "$PROXY_NAME" ]]; then
-  AVAILABLE=$(ls "${SCRIPT_DIR}"/.*.conf 2>/dev/null | xargs -I{} bash -c 'source "{}"; echo "$PROXY_NAME"' 2>/dev/null || true)
+  AVAILABLE=$(ls "${SCRIPT_DIR}"/.*.conf 2>/dev/null \
+    | xargs -I{} bash -c 'source "{}"; echo "$PROXY_NAME"' 2>/dev/null || true)
   if [[ -z "$AVAILABLE" ]]; then
     error "Keine installierten Proxys gefunden."
   fi
@@ -51,6 +53,10 @@ remove_proxy() {
   local conf="${CONFIG_STORE}/${name}"
   local link="${ENABLED_DIR}/${name}"
   local meta="${SCRIPT_DIR}/.${name}.conf"
+  local fqdn=""
+
+  # Read FQDN from meta before deleting it
+  [[ -f "$meta" ]] && fqdn=$(bash -c "source \"$meta\"; echo \"\$FQDN\"")
 
   info "Entferne Proxy: $name"
 
@@ -66,6 +72,19 @@ remove_proxy() {
     rm -f "$meta"
     log "  Meta-Datei entfernt: $meta"
   fi
+
+  # Offer to revoke and delete the certificate
+  if [[ -n "$fqdn" && -d "/etc/letsencrypt/live/${fqdn}" ]]; then
+    echo ""
+    read -rp "  Let's Encrypt Zertifikat für ${fqdn} auch löschen? [j/N]: " DEL_CERT
+    if [[ "$DEL_CERT" =~ ^[jJyY]$ ]]; then
+      certbot delete --cert-name "$fqdn" --non-interactive 2>/dev/null || \
+        certbot delete --cert-name "$fqdn" || true
+      log "  Zertifikat gelöscht: $fqdn"
+    else
+      info "  Zertifikat behalten: /etc/letsencrypt/live/${fqdn}/"
+    fi
+  fi
 }
 
 if [[ "$PROXY_NAME" == "alle" ]]; then
@@ -75,9 +94,8 @@ if [[ "$PROXY_NAME" == "alle" ]]; then
   echo ""
   for meta in "${SCRIPT_DIR}"/.*.conf; do
     [[ -f "$meta" ]] || continue
-    # shellcheck source=/dev/null
-    source "$meta"
-    remove_proxy "$PROXY_NAME"
+    name=$(bash -c "source \"$meta\"; echo \"\$PROXY_NAME\"")
+    remove_proxy "$name"
   done
 else
   warn "Proxy '${PROXY_NAME}' wird entfernt."

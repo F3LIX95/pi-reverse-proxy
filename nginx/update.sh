@@ -1,7 +1,8 @@
 #!/bin/bash
 # ============================================================
 # Nginx Reverse Proxy – Update Script
-# Changes backend URL and/or port for an existing proxy.
+# Change backend URL/port or rotate the TLS certificate
+# (e.g. after a domain change) without full reinstall.
 # ============================================================
 # Usage: sudo bash update.sh [proxy-name]
 # ============================================================
@@ -33,7 +34,8 @@ echo ""
 # ── Proxy-Name bestimmen ─────────────────────────────────────
 PROXY_NAME="$1"
 if [[ -z "$PROXY_NAME" ]]; then
-  AVAILABLE=$(ls "${SCRIPT_DIR}"/.*.conf 2>/dev/null | sed 's|.*\.||;s|\.conf$||' || true)
+  AVAILABLE=$(ls "${SCRIPT_DIR}"/.*.conf 2>/dev/null \
+    | xargs -I{} bash -c 'source "{}"; echo "$PROXY_NAME"' 2>/dev/null || true)
   if [[ -z "$AVAILABLE" ]]; then
     error "Keine installierten Proxys gefunden. Bitte zuerst install.sh ausführen."
   fi
@@ -57,21 +59,43 @@ source "$META_FILE"
 info "Aktuelle Werte (Enter = unverändert):"
 echo ""
 
+read -rp "  FQDN [$FQDN]: " NEW_FQDN
+NEW_FQDN="${NEW_FQDN:-$FQDN}"
+
 read -rp "  Backend-URL [$BACKEND_URL]: " NEW_URL
 NEW_URL="${NEW_URL:-$BACKEND_URL}"
 NEW_URL="${NEW_URL%/}"
 
-read -rp "  Port [$PORT]: " NEW_PORT
-NEW_PORT="${NEW_PORT:-$PORT}"
+read -rp "  Backend-Port [$BACKEND_PORT]: " NEW_PORT
+NEW_PORT="${NEW_PORT:-$BACKEND_PORT}"
 [[ ! "$NEW_PORT" =~ ^[0-9]+$ ]] && error "Port muss eine Zahl sein."
+
+NEW_BACKEND_HOST=$(echo "$NEW_URL" | sed 's|https\?://||;s|/.*||')
 
 echo ""
 info "Neue Konfiguration:"
+info "  FQDN:    $NEW_FQDN"
 info "  Backend: ${NEW_URL}:${NEW_PORT}"
 echo ""
 read -rp "  Fortfahren? [j/N]: " CONFIRM
 [[ "$CONFIRM" =~ ^[jJyY]$ ]] || { echo "Abgebrochen."; exit 0; }
 echo ""
+
+# ── Neues Zertifikat holen wenn FQDN geändert ────────────────
+CERT_PATH="/etc/letsencrypt/live/${NEW_FQDN}/fullchain.pem"
+if [[ "$NEW_FQDN" != "$FQDN" ]]; then
+  info "FQDN geändert – hole neues Let's Encrypt Zertifikat..."
+  certbot certonly \
+    --nginx \
+    -d "$NEW_FQDN" \
+    --email "$EMAIL" \
+    --agree-tos \
+    --non-interactive
+  log "Zertifikat erhalten: /etc/letsencrypt/live/${NEW_FQDN}/"
+elif [[ ! -f "$CERT_PATH" ]]; then
+  warn "Zertifikat für ${NEW_FQDN} nicht gefunden. Bitte certbot manuell ausführen:"
+  warn "  sudo certbot certonly --nginx -d ${NEW_FQDN}"
+fi
 
 # ── nginx-Konfiguration neu schreiben ────────────────────────
 info "Schreibe nginx-Konfiguration..."
@@ -81,10 +105,29 @@ map \$http_upgrade \$connection_upgrade {
     ''      close;
 }
 
+# HTTP → HTTPS redirect; ACME challenges pass through
 server {
-    listen [::]:${NEW_PORT} ipv6only=off;
+    listen [::]:80 ipv6only=off;
+    server_name ${NEW_FQDN};
 
-    server_name _;
+    location /.well-known/acme-challenge/ {
+        root /var/www/html;
+    }
+
+    location / {
+        return 301 https://\$host\$request_uri;
+    }
+}
+
+# HTTPS reverse proxy
+server {
+    listen [::]:443 ssl http2 ipv6only=off;
+    server_name ${NEW_FQDN};
+
+    ssl_certificate     /etc/letsencrypt/live/${NEW_FQDN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${NEW_FQDN}/privkey.pem;
+    include             /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam         /etc/letsencrypt/ssl-dhparams.pem;
 
     location / {
         proxy_pass         ${NEW_URL}:${NEW_PORT};
@@ -93,7 +136,7 @@ server {
         proxy_set_header   Upgrade    \$http_upgrade;
         proxy_set_header   Connection \$connection_upgrade;
 
-        proxy_set_header   Host              $(echo "$NEW_URL" | sed 's|https\?://||'):${NEW_PORT};
+        proxy_set_header   Host              ${NEW_BACKEND_HOST}:${NEW_PORT};
         proxy_set_header   X-Real-IP         \$remote_addr;
         proxy_set_header   X-Forwarded-For   \$proxy_add_x_forwarded_for;
         proxy_set_header   X-Forwarded-Proto \$scheme;
@@ -109,10 +152,12 @@ log "nginx-Konfiguration aktualisiert"
 # ── Meta-Datei aktualisieren ─────────────────────────────────
 cat > "$META_FILE" << META
 PROXY_NAME="${PROXY_NAME}"
+FQDN="${NEW_FQDN}"
+EMAIL="${EMAIL}"
 BACKEND_URL="${NEW_URL}"
-PORT="${NEW_PORT}"
+BACKEND_PORT="${NEW_PORT}"
 META
-log "Proxy-Konfiguration gespeichert"
+log "Meta-Konfiguration gespeichert"
 
 # ── nginx testen und neu laden ───────────────────────────────
 info "Teste nginx-Konfiguration..."
@@ -123,5 +168,5 @@ systemctl reload nginx
 log "nginx neu geladen"
 
 echo ""
-log "Update abgeschlossen: ${PROXY_NAME} → ${NEW_URL}:${NEW_PORT}"
+log "Update abgeschlossen: ${PROXY_NAME} → https://${NEW_FQDN} → ${NEW_URL}:${NEW_PORT}"
 echo ""

@@ -3,18 +3,20 @@
 Raspberry Pi setup for two things that work together:
 
 1. **DDNS** — keeps an IPv64.net AAAA record pointing at the Pi's current public IPv6 address
-2. **Nginx reverse proxy** — accepts incoming IPv6 connections and forwards them to IPv4-only backends on the local network (e.g. a Loxone Miniserver)
+2. **Nginx reverse proxy** — terminates TLS on port 443 and forwards HTTPS connections to IPv4-only backends on the local network (e.g. a Loxone Miniserver)
 
 ```
 Internet (IPv6)
       │
-      ▼
- Fritzbox (port open)
+      ▼  TCP 443 (HTTPS)
+ Fritzbox (port 80 + 443 open)
       │
       ▼
 Raspberry Pi – nginx
-      │   listens on [::]:PORT
-      ▼
+  │  listens on [::]:443  – TLS termination (Let's Encrypt cert)
+  │  listens on [::]:80   – ACME challenges + redirect to HTTPS
+      │
+      ▼  plain HTTP on LAN
 IPv4-only backend
  e.g. http://loxone.fritz.box:1907
 ```
@@ -157,7 +159,7 @@ dig AAAA <your-domain> +short @ns1.ipv64.net
 
 ## Part 2 – Nginx Reverse Proxy
 
-Accepts IPv6 (and IPv4) connections on a given port and proxies them to an IPv4-only backend. WebSocket support is included (long-lived `Upgrade` connections).
+Terminates HTTPS on port 443 using a Let's Encrypt certificate and proxies to an IPv4-only backend on the local network. Port 80 is kept open only for ACME renewal challenges and redirects everything else to HTTPS. WebSocket support is included.
 
 ### Install
 
@@ -170,17 +172,28 @@ Asks for:
 | Input | Example |
 |---|---|
 | Proxy name | `loxone1` |
+| FQDN | `myhost.ipv64.de` |
+| Let's Encrypt e-mail | `you@example.com` |
 | Backend URL | `http://loxone.fritz.box` |
-| Port | `1907` |
+| Backend port | `1907` |
 
-The same port is used for both listening and the backend. Each proxy gets its own nginx site config at `/etc/nginx/sites-available/<name>` and a metadata file at `nginx/.<name>.conf` that `update.sh` / `uninstall.sh` read later.
+The script:
+1. Installs nginx + certbot
+2. Writes a temporary HTTP-only config so certbot can complete the ACME challenge
+3. Obtains the certificate via `certbot certonly --nginx`
+4. Rewrites the config to HTTPS-only with the certificate
+5. Installs a deploy hook so nginx is reloaded on every automatic renewal
 
-### Update (change backend URL or port)
+Each proxy gets its own nginx site config at `/etc/nginx/sites-available/<name>` and a metadata file at `nginx/.<name>.conf` that `update.sh` / `uninstall.sh` read later.
+
+### Update (change FQDN, backend URL, or backend port)
 
 ```bash
 sudo bash nginx/update.sh [proxy-name]
 # or omit the name to be prompted
 ```
+
+If the FQDN changes, a new certificate is obtained automatically.
 
 ### Uninstall
 
@@ -189,10 +202,14 @@ sudo bash nginx/uninstall.sh [proxy-name]
 # or use 'alle' to remove every managed proxy
 ```
 
-### After install: open the port on the Fritzbox
+Optionally also revokes and deletes the Let's Encrypt certificate.
+
+### After install: open ports on the Fritzbox
 
 1. Fritzbox → Internet → Freigaben → IPv6
-2. Add rule: TCP, port `<PORT>` → your Pi's IPv6 address
+2. Add two rules pointing to the Pi's IPv6 address:
+   - TCP **80** (needed for Let's Encrypt renewal)
+   - TCP **443** (HTTPS proxy)
 
 ### Useful commands
 
@@ -200,15 +217,30 @@ sudo bash nginx/uninstall.sh [proxy-name]
 # nginx error log
 sudo tail -f /var/log/nginx/error.log
 
-# Check port is open
-ss -tlnp | grep <PORT>
+# Check ports are open
+ss -tlnp | grep -E ':80|:443'
 
 # Test config
 sudo nginx -t
 
 # Reload after manual edits
 sudo systemctl reload nginx
+
+# Show certificates and expiry dates
+sudo certbot certificates
+
+# Test automatic renewal
+sudo certbot renew --dry-run
 ```
+
+### Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `certbot: connection refused` | Port 80 not open on Fritzbox | Add IPv6 rule TCP 80 → Pi |
+| Certificate expired / not renewed | Deploy hook missing | Check `/etc/letsencrypt/renewal-hooks/deploy/` |
+| 502 Bad Gateway | Backend unreachable | `curl http://loxone.fritz.box:1907` from the Pi |
+| `ssl_dhparam` file missing | certbot didn't write it | `sudo openssl dhparam -out /etc/letsencrypt/ssl-dhparams.pem 2048` |
 
 ---
 
