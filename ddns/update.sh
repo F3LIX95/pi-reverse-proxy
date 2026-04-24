@@ -42,12 +42,10 @@ echo ""
 read -rp "  Domain [$CUR_DOMAIN]: " NEW_DOMAIN
 NEW_DOMAIN="${NEW_DOMAIN:-$CUR_DOMAIN}"
 
-read -rsp "  DynDNS Update Token (leer = unverändert): " NEW_TOKEN
-echo ""
+read -rp "  DynDNS Update Token (leer = unverändert): " NEW_TOKEN
 NEW_TOKEN="${NEW_TOKEN:-$CUR_TOKEN}"
 
-read -rsp "  Account API Key (leer = unverändert): " NEW_API_KEY
-echo ""
+read -rp "  Account API Key (leer = unverändert): " NEW_API_KEY
 NEW_API_KEY="${NEW_API_KEY:-$CUR_API_KEY}"
 
 read -rp "  Interface [$CUR_IFACE]: " NEW_IFACE

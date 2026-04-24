@@ -33,12 +33,10 @@ echo ""
 read -rp "  Domain (z.B. meinhost.ipv64.de): " DOMAIN
 [[ -z "$DOMAIN" ]] && error "Domain darf nicht leer sein."
 
-read -rsp "  IPv64 DynDNS Update Token: " TOKEN
-echo ""
+read -rp "  IPv64 DynDNS Update Token: " TOKEN
 [[ -z "$TOKEN" ]] && error "Token darf nicht leer sein."
 
-read -rsp "  IPv64 Account API Key (für IP-Abgleich via API): " API_KEY
-echo ""
+read -rp "  IPv64 Account API Key (für IP-Abgleich via API): " API_KEY
 [[ -z "$API_KEY" ]] && error "API Key darf nicht leer sein."
 
 info "Verfügbare Interfaces:"
