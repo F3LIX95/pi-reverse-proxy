@@ -1,8 +1,8 @@
 #!/bin/bash
 # ============================================================
 # IPv64 DynDNS Update – Update Script
-# Updates domain, token, and/or interface in the running setup
-# without a full reinstall.
+# Rewrites /usr/local/bin/ipv64-update.sh with new config
+# and the latest script logic.
 # ============================================================
 # Usage: sudo bash update.sh
 # ============================================================
@@ -60,17 +60,89 @@ read -rp "  Fortfahren? [j/N]: " CONFIRM
 [[ "$CONFIRM" =~ ^[jJyY]$ ]] || { echo "Abgebrochen."; exit 0; }
 echo ""
 
-# ── Werte ersetzen ───────────────────────────────────────────
-sed -i "s|^DOMAIN=.*|DOMAIN=\"${NEW_DOMAIN}\"|"    "$SCRIPT"
-sed -i "s|^TOKEN=.*|TOKEN=\"${NEW_TOKEN}\"|"        "$SCRIPT"
-sed -i "s|^API_KEY=.*|API_KEY=\"${NEW_API_KEY}\"|" "$SCRIPT"
-sed -i "s|^IFACE=.*|IFACE=\"${NEW_IFACE}\"|"       "$SCRIPT"
-log "Konfiguration aktualisiert"
+# ── Script komplett neu schreiben (inkl. aktueller Logik) ────
+info "Schreibe Update-Script..."
+cat > "$SCRIPT" << SCRIPT
+#!/bin/bash
+DOMAIN="${NEW_DOMAIN}"
+TOKEN="${NEW_TOKEN}"
+API_KEY="${NEW_API_KEY}"
+LOGFILE="/var/log/ipv64-update.log"
+IFACE="${NEW_IFACE}"
+TIMESTAMP=\$(date '+%Y-%m-%d %H:%M:%S')
+TRIGGER="\${1:-timer}"
+
+# Current public IPv6 on this interface
+IPV6=\$(ip -6 addr show "\$IFACE" scope global \
+  | grep -oP '(?<=inet6 )[0-9a-f:]+(?=/)' \
+  | grep -v '^f[cd]' \
+  | head -1)
+
+if [[ -z "\$IPV6" ]]; then
+  echo "[\$TIMESTAMP] [\$TRIGGER] ERROR: Konnte keine öffentliche IPv6 auf \$IFACE ermitteln" >> "\$LOGFILE"
+  exit 1
+fi
+
+# Query the IPv64 API for the stored AAAA record – avoids CDN/proxy IPs
+# that a DNS lookup would return when the CDN reverse proxy is active.
+SUBDOMAIN="\${DOMAIN%%.*}"
+PARENT="\${DOMAIN#*.}"
+API_RESPONSE=\$(curl -s --max-time 10 \
+  "https://ipv64.net/api.php?get_domains" \
+  -H "Authorization: Bearer \${API_KEY}")
+
+# When CDN is active IPv64 adds a second active AAAA record with the CDN IP
+# and marks the real Pi IP as deactivated=1. Filter for that entry.
+API_IPV6=\$(echo "\$API_RESPONSE" \
+  | jq -r --arg domain "\$PARENT" --arg sub "\$SUBDOMAIN" \
+    '.subdomains[\$domain].records[]
+     | select(.praefix == \$sub and .type == "AAAA" and .deactivated == 1)
+     | .content' 2>/dev/null | head -1)
+
+# Fallback: no deactivated record means CDN is off, use the active one
+if [[ -z "\$API_IPV6" ]]; then
+  API_IPV6=\$(echo "\$API_RESPONSE" \
+    | jq -r --arg domain "\$PARENT" --arg sub "\$SUBDOMAIN" \
+      '.subdomains[\$domain].records[]
+       | select(.praefix == \$sub and .type == "AAAA" and .deactivated == 0)
+       | .content' 2>/dev/null | head -1)
+fi
+
+if [[ -z "\$API_IPV6" ]]; then
+  echo "[\$TIMESTAMP] [\$TRIGGER] ERROR: API-Abfrage fehlgeschlagen oder kein AAAA-Eintrag gefunden" >> "\$LOGFILE"
+  exit 1
+fi
+
+if [[ "\$IPV6" == "\$API_IPV6" ]]; then
+  echo "[\$TIMESTAMP] [\$TRIGGER] INFO: Keine Änderung (\$IPV6)" >> "\$LOGFILE"
+  exit 0
+fi
+
+UPDATE_RESPONSE=\$(curl -s --max-time 10 \
+  "https://ipv64.net/nic/update?hostname=\${DOMAIN}&myip=\${IPV6}" \
+  -u "none:\${TOKEN}")
+
+if echo "\$UPDATE_RESPONSE" | grep -q '"status":"success"'; then
+  echo "[\$TIMESTAMP] [\$TRIGGER] SUCCESS: DNS aktualisiert \$API_IPV6 → \$IPV6" >> "\$LOGFILE"
+else
+  echo "[\$TIMESTAMP] [\$TRIGGER] ERROR: Update fehlgeschlagen. Response: \$UPDATE_RESPONSE" >> "\$LOGFILE"
+  exit 1
+fi
+SCRIPT
+chmod 700 "$SCRIPT"
+log "Script aktualisiert: $SCRIPT"
+
+# ── jq sicherstellen ─────────────────────────────────────────
+if ! command -v jq &>/dev/null; then
+  info "Installiere jq..."
+  apt-get install -y -q jq > /dev/null 2>&1
+  log "jq installiert"
+fi
 
 # ── Test-Lauf ────────────────────────────────────────────────
 echo ""
 info "Führe Test-Lauf durch..."
-/usr/local/bin/ipv64-update.sh "update"
+"$SCRIPT" "update"
 echo ""
 log "Ergebnis:"
 tail -1 /var/log/ipv64-update.log
