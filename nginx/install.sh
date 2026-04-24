@@ -122,6 +122,11 @@ HOOK
 chmod +x /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
 log "Renewal deploy-hook eingerichtet"
 
+# ── Lokalen DNS-Resolver ermitteln ───────────────────────────
+RESOLVER=$(grep '^nameserver' /etc/resolv.conf | head -1 | awk '{print $2}')
+[[ -z "$RESOLVER" ]] && RESOLVER="127.0.0.53"
+log "DNS-Resolver: $RESOLVER"
+
 # ── Finale nginx-Konfiguration (HTTPS + Proxy) ────────────────
 info "Schreibe finale nginx-Konfiguration..."
 cat > "$CONF_FILE" << NGINX
@@ -146,7 +151,8 @@ server {
 
 # HTTPS reverse proxy
 server {
-    listen [::]:443 ssl http2 ipv6only=off;
+    listen [::]:443 ssl ipv6only=off;
+    http2 on;
     server_name ${FQDN};
 
     ssl_certificate     /etc/letsencrypt/live/${FQDN}/fullchain.pem;
@@ -154,8 +160,13 @@ server {
     include             /etc/letsencrypt/options-ssl-nginx.conf;
     ssl_dhparam         /etc/letsencrypt/ssl-dhparams.pem;
 
+    # Defer backend DNS resolution to request time so local hostnames
+    # (e.g. loxone.fritz.box) don't cause nginx -t to fail at startup.
+    resolver ${RESOLVER} valid=30s ipv6=off;
+
     location / {
-        proxy_pass         ${BACKEND_URL}:${BACKEND_PORT};
+        set \$upstream ${BACKEND_URL}:${BACKEND_PORT};
+        proxy_pass \$upstream;
 
         proxy_http_version 1.1;
         proxy_set_header   Upgrade    \$http_upgrade;

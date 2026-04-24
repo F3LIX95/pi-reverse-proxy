@@ -97,6 +97,10 @@ elif [[ ! -f "$CERT_PATH" ]]; then
   warn "  sudo certbot certonly --nginx -d ${NEW_FQDN}"
 fi
 
+# ── Lokalen DNS-Resolver ermitteln ───────────────────────────
+RESOLVER=$(grep '^nameserver' /etc/resolv.conf | head -1 | awk '{print $2}')
+[[ -z "$RESOLVER" ]] && RESOLVER="127.0.0.53"
+
 # ── nginx-Konfiguration neu schreiben ────────────────────────
 info "Schreibe nginx-Konfiguration..."
 cat > "$CONF_FILE" << NGINX
@@ -121,7 +125,8 @@ server {
 
 # HTTPS reverse proxy
 server {
-    listen [::]:443 ssl http2 ipv6only=off;
+    listen [::]:443 ssl ipv6only=off;
+    http2 on;
     server_name ${NEW_FQDN};
 
     ssl_certificate     /etc/letsencrypt/live/${NEW_FQDN}/fullchain.pem;
@@ -129,8 +134,13 @@ server {
     include             /etc/letsencrypt/options-ssl-nginx.conf;
     ssl_dhparam         /etc/letsencrypt/ssl-dhparams.pem;
 
+    # Defer backend DNS resolution to request time so local hostnames
+    # (e.g. loxone.fritz.box) don't cause nginx -t to fail at startup.
+    resolver ${RESOLVER} valid=30s ipv6=off;
+
     location / {
-        proxy_pass         ${NEW_URL}:${NEW_PORT};
+        set \$upstream ${NEW_URL}:${NEW_PORT};
+        proxy_pass \$upstream;
 
         proxy_http_version 1.1;
         proxy_set_header   Upgrade    \$http_upgrade;
