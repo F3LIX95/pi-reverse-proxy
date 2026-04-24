@@ -86,27 +86,25 @@ fi
 
 # Query the IPv64 API for the stored AAAA record – avoids CDN/proxy IPs
 # that a DNS lookup would return when the CDN reverse proxy is active.
-# Extracts the subdomain prefix (empty string for apex / single-label host).
-SUBDOMAIN="\${DOMAIN%%.*}"
-PARENT="\${DOMAIN#*.}"
+# The API key in .subdomains is the full domain; praefix="" for apex records.
 API_RESPONSE=\$(curl -s --max-time 10 \
   "https://ipv64.net/api.php?get_domains" \
   -H "Authorization: Bearer \${API_KEY}")
 
-# When CDN is active IPv64 adds a second active AAAA record with the CDN IP
-# and marks the real Pi IP as deactivated=1. Filter for that entry.
+# When CDN is active IPv64 marks the real Pi IP as deactivated=1 and adds
+# a second record with the CDN IP as deactivated=0. Use deactivated=1 first.
 API_IPV6=\$(echo "\$API_RESPONSE" \
-  | jq -r --arg domain "\$PARENT" --arg sub "\$SUBDOMAIN" \
+  | jq -r --arg domain "\$DOMAIN" \
     '.subdomains[\$domain].records[]
-     | select(.praefix == \$sub and .type == "AAAA" and .deactivated == 1)
+     | select(.praefix == "" and .type == "AAAA" and .deactivated == 1)
      | .content' 2>/dev/null | head -1)
 
-# Fallback: no deactivated record means CDN is off, use the active one
+# Fallback: CDN is off, only one active AAAA record exists
 if [[ -z "\$API_IPV6" ]]; then
   API_IPV6=\$(echo "\$API_RESPONSE" \
-    | jq -r --arg domain "\$PARENT" --arg sub "\$SUBDOMAIN" \
+    | jq -r --arg domain "\$DOMAIN" \
       '.subdomains[\$domain].records[]
-       | select(.praefix == \$sub and .type == "AAAA" and .deactivated == 0)
+       | select(.praefix == "" and .type == "AAAA" and .deactivated == 0)
        | .content' 2>/dev/null | head -1)
 fi
 
